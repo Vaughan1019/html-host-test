@@ -1235,16 +1235,18 @@ token = resp.json()["access_token"]<button class="cp-btn" onclick="copyCode(this
 
     <!-- OIDC field set -->
     <div class="form-grid" id="oidcFields">
+      <div class="form-field"><label>Organization name <span class="req">*</span></label><input type="text" id="oidc_customername" placeholder="Contoso Insurance"><div class="field-err">Required.</div></div>
       <div class="form-field"><label>Issuer / discovery URL <span class="req">*</span></label><input type="url" id="oidc_issuer" placeholder="https://idp.your-org.example/.well-known/openid-configuration"><div class="field-err">Enter a valid URL.</div></div>
       <div class="form-field"><label>Authorization endpoint <span class="req">*</span></label><input type="url" id="oidc_authz" placeholder="https://idp.your-org.example/authorize"><div class="field-err">Enter a valid URL.</div></div>
       <div class="form-field"><label>Token endpoint <span class="req">*</span></label><input type="url" id="oidc_token" placeholder="https://idp.your-org.example/oauth2/token"><div class="field-err">Enter a valid URL.</div></div>
       <div class="form-field"><label>JWKS URI <span class="req">*</span></label><input type="url" id="oidc_jwks" placeholder="https://idp.your-org.example/.well-known/jwks.json"><div class="field-err">Enter a valid URL.</div></div>
       <div class="form-field"><label>Client ID <span class="req">*</span></label><input type="text" id="oidc_clientid" placeholder="your-app-client-id"><div class="field-err">Required.</div></div>
-      <div class="form-field"><label>Client Secret <span class="req">*</span></label><input type="text" id="oidc_secret" placeholder="••••••••"><div class="field-err">Required.</div><div class="form-hint">Masked in the generated artifact — transmit the real value via a secure channel.</div></div>
       <div class="form-field"><label>Scopes <span class="req">*</span></label><input type="text" id="oidc_scopes" placeholder="openid profile email"><div class="field-err">Required.</div></div>
       <div class="form-field"><label>Custom user-type claim name <span class="req">*</span></label><input type="text" id="oidc_claimname" placeholder="https://your-org/userType"><div class="field-err">Required.</div></div>
       <div class="form-field"><label>Custom user-type claim values <span class="req">*</span></label><input type="text" id="oidc_claimvalues" placeholder="Restricted, Standard, Administrator"><div class="field-err">Required.</div><div class="form-hint">Comma-separated.</div></div>
     </div>
+
+    <div class="callout warn"><span class="ct">Client Secret — never paste it here</span>Send your Client Secret to Ethos separately via a secure channel (encrypted email or a secrets manager) — never paste it here.</div>
 
     <button class="btn-primary" onclick="generateSsoArtifact()">Generate handoff artifact</button>
 
@@ -2264,19 +2266,19 @@ function toggleAllObjects(open) {
 
 /* ===== SSO / JIT MODULE (OIDC only) ===== */
 const SSO_FIELDS = [
+  {id:'oidc_customername', label:'Organization name', key:'customerName'},
   {id:'oidc_issuer', label:'Issuer / discovery URL', key:'issuer', url:true},
   {id:'oidc_authz', label:'Authorization endpoint', key:'authorizationEndpoint', url:true},
   {id:'oidc_token', label:'Token endpoint', key:'tokenEndpoint', url:true},
   {id:'oidc_jwks', label:'JWKS URI', key:'jwksUri', url:true},
   {id:'oidc_clientid', label:'Client ID', key:'clientId'},
-  {id:'oidc_secret', label:'Client Secret', key:'clientSecret', secret:true},
   {id:'oidc_scopes', label:'Scopes', key:'scopes'},
   {id:'oidc_claimname', label:'Custom user-type claim name', key:'userTypeClaimName'},
   {id:'oidc_claimvalues', label:'Custom user-type claim values', key:'userTypeClaimValues', list:true}
 ];
 
 function validURL(s){
-  try { const u = new URL(s.trim()); return u.protocol === 'http:' || u.protocol === 'https:'; }
+  try { const u = new URL(s.trim()); return u.protocol === 'https:'; }
   catch(e){ return false; }
 }
 function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -2305,18 +2307,24 @@ function validateSso() {
 function generateSsoArtifact() {
   if (!validateSso()) return;
   const inputs = getSsoInputs();
-  localStorage.setItem('sl-sso-intake', JSON.stringify(inputs));
+  localStorage.setItem('sl-sso-intake', JSON.stringify(inputs)); // no secret persisted now
 
-  const cfg = { protocol: 'OIDC', requestType: 'SelfServiceJIT', idp: {} };
-  SSO_FIELDS.forEach(f => {
-    let v = inputs[f.id];
-    if (f.secret) v = '<provided-separately-via-secure-channel>';
-    else if (f.list) v = v.split(',').map(s => s.trim()).filter(Boolean);
-    cfg.idp[f.key] = v;
-  });
-  cfg.userTypeMapping = { model: ['Restricted','Standard','Administrator'], noClaimBehavior: 'lowest-privilege default' };
-  setArtifact('ssoArtifactJson', JSON.stringify(cfg, null, 2));
-
+  // Flat schema — maps 1:1 to usp_ProvisionSSOCustomer. Customer-supplied fields only.
+  // Client Secret travels via a secure channel (omitted). ParentCompanyId / CompanyDivisionId /
+  // ClientIdInternal are added by Ethos during provisioning enrichment.
+  const artifact = {
+    customerName:          inputs.oidc_customername,
+    issuerUrl:             inputs.oidc_issuer,
+    authorizationEndpoint: inputs.oidc_authz,
+    tokenEndpoint:         inputs.oidc_token,
+    jwksUri:               inputs.oidc_jwks,
+    clientId:              inputs.oidc_clientid,
+    clientSecret:          "provided-separately-via-secure-channel", // placeholder → sets ClientSecretReceived=Yes; never a real secret
+    scopes:                inputs.oidc_scopes,
+    userTypeClaimName:     inputs.oidc_claimname,
+    userTypeClaimValues:   inputs.oidc_claimvalues.split(',').map(s => s.trim()).filter(Boolean).join(',')
+  };
+  setArtifact('ssoArtifactJson', JSON.stringify(artifact, null, 2));
   setArtifact('ssoArtifactNote', buildHandoffNote(inputs));
   document.getElementById('ssoArtifactOut').classList.remove('sso-hidden');
 }
@@ -2328,20 +2336,25 @@ function buildHandoffNote(inputs) {
   lines.push('Generated: ' + today);
   lines.push('This is a handoff artifact only; nothing was written to any system.');
   lines.push('');
-  lines.push('Requesting org IdP details:');
+  lines.push('Customer-supplied fields (in the JSON artifact):');
   SSO_FIELDS.forEach(f => {
-    let v = inputs[f.id];
-    if (f.secret) v = '(shared separately via secure channel)';
-    lines.push('  - ' + f.label + ': ' + v);
+    lines.push('  - ' + f.label + ': ' + inputs[f.id]);
   });
+  lines.push('');
+  lines.push('Client Secret: the artifact carries a non-secret placeholder so the receipt flag reads "Yes"; the real secret is still sent separately via a secure channel.');
   lines.push('');
   lines.push('User-type mapping requested:');
   lines.push('  - Values map to capability levels: Restricted, Standard, Administrator');
   lines.push('  - Each value maps to the agreed client record / division');
   lines.push('  - No claim sent -> lowest-privilege default');
   lines.push('');
+  lines.push('Ethos to complete during enrichment:');
+  lines.push('  - ParentCompanyId, CompanyDivisionId, ClientId (internal)');
+  lines.push('  - Confirm Client Secret received');
+  lines.push('  - Attach coverage doc');
+  lines.push('');
   lines.push('Action: Configure OIDC JIT provisioning.');
-  lines.push('Please return: Redirect / Callback URI and SIGHTLINE OIDC Client ID (staging + production).');
+  lines.push('Ethos returns (Table B): Redirect / Callback URI and SIGHTLINE OIDC Client ID (staging + production).');
   return lines.join('\n');
 }
 
